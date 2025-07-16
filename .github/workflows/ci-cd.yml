@@ -165,22 +165,63 @@ jobs:
           --docker-password=${{ secrets.REGISTRY_PASSWORD }} \
           --namespace=${{ env.K8S_NAMESPACE }} \
           --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Verify the secret was created
+        kubectl get secret acr-secret -n ${{ env.K8S_NAMESPACE }}
+        
+        # Test image accessibility
+        IMAGE_TAG="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:main-${{ github.sha }}"
+        echo "Testing image accessibility: $IMAGE_TAG"
+        
+        # Create a test pod to verify image can be pulled
+        kubectl run test-image-pull \
+          --image=$IMAGE_TAG \
+          --restart=Never \
+          --namespace=${{ env.K8S_NAMESPACE }} \
+          --image-pull-policy=Always \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Wait for image pull test
+        kubectl wait --for=condition=ready pod/test-image-pull -n ${{ env.K8S_NAMESPACE }} --timeout=120s || true
+        
+        # Check if image pull worked
+        kubectl describe pod test-image-pull -n ${{ env.K8S_NAMESPACE }}
+        
+        # Clean up test pod
+        kubectl delete pod test-image-pull -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
     
     - name: Deploy to AKS
       run: |
         # Get the image tag from the previous job
         IMAGE_TAG="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:main-${{ github.sha }}"
         
+        echo "Deploying image: $IMAGE_TAG"
+        
         # Update deployment with new image
         sed -i "s|REGISTRY_LOGIN_SERVER/python-flask-app:latest|${IMAGE_TAG}|g" k8s/deployment.yaml
+        
+        # Verify the substitution worked
+        echo "Updated deployment.yaml:"
+        grep "image:" k8s/deployment.yaml
         
         # Apply Kubernetes manifests
         kubectl apply -f k8s/namespace.yaml
         kubectl apply -f k8s/deployment.yaml
         kubectl apply -f k8s/service.yaml
         
-        # Wait for deployment to complete
-        kubectl rollout status deployment/python-flask-app -n ${{ env.K8S_NAMESPACE }} --timeout=300s
+        # Wait for deployment to complete with extended timeout
+        echo "Waiting for deployment to complete..."
+        kubectl rollout status deployment/python-flask-app -n ${{ env.K8S_NAMESPACE }} --timeout=600s
+        
+        # If deployment fails, get debug information
+        if [ $? -ne 0 ]; then
+          echo "Deployment failed! Getting debug information..."
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          kubectl describe deployment python-flask-app -n ${{ env.K8S_NAMESPACE }}
+          kubectl describe pods -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }}
+          kubectl logs -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }} --tail=50
+          exit 1
+        fi
         
         # Get deployment status
         kubectl get pods -n ${{ env.K8S_NAMESPACE }}
