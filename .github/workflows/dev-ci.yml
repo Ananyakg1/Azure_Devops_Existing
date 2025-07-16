@@ -40,15 +40,12 @@ jobs:
         pip install -r requirements.txt
     
     - name: Run Snyk security scan
-      run: |
-        echo "Installing Snyk CLI"
-        curl -Lo snyk https://github.com/snyk/cli/releases/latest/download/snyk-linux
-        chmod +x snyk
-        sudo mv snyk /usr/local/bin/
-        
-        echo "Running Snyk security scan"
-        snyk auth ${{ secrets.SNYK_TOKEN }}
-        snyk test --severity-threshold=high || true
+      uses: snyk/actions/python-3.9@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
     
     - name: Run tests with coverage
       run: |
