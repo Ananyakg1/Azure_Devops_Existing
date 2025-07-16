@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-flask-app
+  namespace: github-copilot-ns
+  labels:
+    app: python-flask-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: python-flask-app
+  template:
+    metadata:
+      labels:
+        app: python-flask-app
+    spec:
+      containers:
+      - name: python-flask-app
+        image: REGISTRY_LOGIN_SERVER/python-flask-app:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: FLASK_ENV
+          value: "production"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: python-flask-app-config
+  namespace: github-copilot-ns
+data:
+  FLASK_ENV: "production"
+  LOG_LEVEL: "INFO"

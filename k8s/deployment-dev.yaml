@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-flask-app-dev
+  namespace: github-copilot-ns
+  labels:
+    app: python-flask-app-dev
+    environment: development
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-flask-app-dev
+  template:
+    metadata:
+      labels:
+        app: python-flask-app-dev
+        environment: development
+    spec:
+      containers:
+      - name: python-flask-app-dev
+        image: REGISTRY_LOGIN_SERVER/python-flask-app:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: FLASK_ENV
+          value: "development"
+        - name: FLASK_DEBUG
+          value: "True"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      imagePullSecrets:
+      - name: acr-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-flask-app-dev-service
+  namespace: github-copilot-ns
+  labels:
+    app: python-flask-app-dev
+    environment: development
+spec:
+  selector:
+    app: python-flask-app-dev
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP

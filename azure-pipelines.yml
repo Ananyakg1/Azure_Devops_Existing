@@ -1,0 +1,159 @@
+trigger:
+  branches:
+    include:
+      - main
+      - master
+      - develop
+
+variables:
+  - name: imageRepository
+    value: 'python-flask-app'
+  - name: dockerfilePath
+    value: '$(Build.SourcesDirectory)/Dockerfile'
+  - name: tag
+    value: '$(Build.BuildId)'
+  - name: imagePullSecret
+    value: 'acr-secret'
+  - name: k8sNamespace
+    value: 'github-copilot-ns'
+  - name: containerRegistry
+    value: '$(REGISTRY_LOGIN_SERVER)'
+  - name: aksClusterName
+    value: '$(AKS_CLUSTER_NAME)'
+  - name: resourceGroupName
+    value: '$(AKS_RESOURCE_GROUP)'
+
+stages:
+- stage: Build
+  displayName: Build and Test
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.9'
+      displayName: 'Use Python 3.9'
+
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+      displayName: 'Install dependencies'
+
+    - script: |
+        echo "Installing Snyk CLI"
+        curl -Lo snyk https://github.com/snyk/cli/releases/latest/download/snyk-linux
+        chmod +x snyk
+        sudo mv snyk /usr/local/bin/
+        
+        echo "Running Snyk security scan"
+        snyk auth $(SNYK_TOKEN)
+        snyk test --severity-threshold=high
+      displayName: 'Run Snyk security scan'
+      continueOnError: true
+
+    - script: |
+        python -m pytest test_app.py -v --junitxml=junit/test-results.xml --cov=app --cov-report=xml
+      displayName: 'Run tests'
+
+    - script: |
+        python -m pylint app.py --exit-zero --output-format=parseable --reports=no > pylint-report.txt
+      displayName: 'Run linting'
+
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFiles: '**/test-*.xml'
+        testRunTitle: 'Publish test results for Python $(python.version)'
+
+    - task: PublishCodeCoverageResults@2
+      inputs:
+        summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+        codeCoverageTool: 'Cobertura'
+
+- stage: Docker
+  displayName: Build and Push Docker Image
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: Docker
+    displayName: Build and Push Docker Image
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - script: |
+        echo "$(REGISTRY_PASSWORD)" | docker login $(REGISTRY_LOGIN_SERVER) --username $(REGISTRY_USERNAME) --password-stdin
+      displayName: 'Docker Login'
+      
+    - script: |
+        docker build -t $(REGISTRY_LOGIN_SERVER)/$(imageRepository):$(tag) .
+        docker build -t $(REGISTRY_LOGIN_SERVER)/$(imageRepository):latest .
+      displayName: 'Build Docker Image'
+      
+    - script: |
+        docker push $(REGISTRY_LOGIN_SERVER)/$(imageRepository):$(tag)
+        docker push $(REGISTRY_LOGIN_SERVER)/$(imageRepository):latest
+      displayName: 'Push Docker Image'
+
+- stage: Deploy
+  displayName: Deploy to AKS
+  dependsOn: Docker
+  condition: succeeded()
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy to AKS
+    pool:
+      vmImage: ubuntu-latest
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              # Install kubectl
+              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+              chmod +x kubectl
+              sudo mv kubectl /usr/local/bin/
+
+              # Install Azure CLI
+              curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+              # Login to Azure using service principal
+              az login --service-principal -u $(AZURE_CLIENT_ID) -p $(AZURE_CLIENT_SECRET) --tenant $(AZURE_TENANT_ID)
+              az account set --subscription $(AZURE_SUSCRIPTION_ID)
+
+              # Get AKS credentials
+              az aks get-credentials --resource-group $(resourceGroupName) --name $(aksClusterName)
+
+              # Verify connection
+              kubectl cluster-info
+            displayName: 'Setup Azure CLI and kubectl'
+
+          - script: |
+              # Create namespace if it doesn't exist
+              kubectl create namespace $(k8sNamespace) --dry-run=client -o yaml | kubectl apply -f -
+              
+              # Create Docker registry secret
+              kubectl create secret docker-registry $(imagePullSecret) \
+                --docker-server=$(REGISTRY_LOGIN_SERVER) \
+                --docker-username=$(REGISTRY_USERNAME) \
+                --docker-password=$(REGISTRY_PASSWORD) \
+                --namespace=$(k8sNamespace) \
+                --dry-run=client -o yaml | kubectl apply -f -
+            displayName: 'Create namespace and secrets'
+
+          - script: |
+              # Update deployment image
+              sed -i "s|yourregistry.azurecr.io/python-flask-app:latest|$(REGISTRY_LOGIN_SERVER)/$(imageRepository):$(tag)|g" k8s/deployment.yaml
+              sed -i "s|your-acr-secret|$(imagePullSecret)|g" k8s/deployment.yaml
+              
+              # Apply Kubernetes manifests
+              kubectl apply -f k8s/namespace.yaml
+              kubectl apply -f k8s/deployment.yaml
+              kubectl apply -f k8s/service.yaml
+              
+              # Check deployment status
+              kubectl rollout status deployment/python-flask-app -n $(k8sNamespace) --timeout=300s
+            displayName: 'Deploy to Kubernetes'

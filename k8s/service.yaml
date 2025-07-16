@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-flask-app-service
+  namespace: github-copilot-ns
+  labels:
+    app: python-flask-app
+spec:
+  selector:
+    app: python-flask-app
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: python-flask-app-ingress
+  namespace: github-copilot-ns
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - your-domain.com
+    secretName: python-flask-app-tls
+  rules:
+  - host: your-domain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: python-flask-app-service
+            port:
+              number: 80
