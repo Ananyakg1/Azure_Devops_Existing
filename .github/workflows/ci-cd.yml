@@ -209,23 +209,51 @@ jobs:
         kubectl apply -f k8s/deployment.yaml
         kubectl apply -f k8s/service.yaml
         
-        # Wait for deployment to complete with extended timeout
-        echo "Waiting for deployment to complete..."
-        kubectl rollout status deployment/python-flask-app -n ${{ env.K8S_NAMESPACE }} --timeout=600s
+        # Check initial pod status
+        echo "Initial pod status:"
+        kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=python-flask-app
         
-        # If deployment fails, get debug information
-        if [ $? -ne 0 ]; then
-          echo "Deployment failed! Getting debug information..."
-          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+        # Wait for deployment with detailed monitoring
+        echo "Waiting for deployment to complete..."
+        
+        # Monitor deployment progress
+        for i in {1..30}; do
+          echo "Check $i: $(date)"
+          kubectl get deployment python-flask-app -n ${{ env.K8S_NAMESPACE }}
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=python-flask-app
+          
+          # Check if deployment is ready
+          if kubectl get deployment python-flask-app -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.readyReplicas}' | grep -q "1"; then
+            echo "✅ Deployment successful!"
+            break
+          fi
+          
+          # Show pod logs if pods are failing
+          echo "Pod details:"
+          kubectl describe pods -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }} | tail -20
+          
+          echo "Pod logs:"
+          kubectl logs -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }} --tail=10 || echo "No logs available yet"
+          
+          echo "Waiting 20 seconds..."
+          sleep 20
+        done
+        
+        # Final status check
+        echo "Final deployment status:"
+        kubectl get deployment python-flask-app -n ${{ env.K8S_NAMESPACE }}
+        kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=python-flask-app
+        kubectl get services -n ${{ env.K8S_NAMESPACE }}
+        
+        # Check if deployment succeeded
+        READY_REPLICAS=$(kubectl get deployment python-flask-app -n ${{ env.K8S_NAMESPACE }} -o jsonpath='{.status.readyReplicas}')
+        if [ "$READY_REPLICAS" != "1" ]; then
+          echo "❌ Deployment failed! Final debug information:"
           kubectl describe deployment python-flask-app -n ${{ env.K8S_NAMESPACE }}
           kubectl describe pods -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }}
           kubectl logs -l app=python-flask-app -n ${{ env.K8S_NAMESPACE }} --tail=50
           exit 1
         fi
-        
-        # Get deployment status
-        kubectl get pods -n ${{ env.K8S_NAMESPACE }}
-        kubectl get services -n ${{ env.K8S_NAMESPACE }}
     
     - name: Run post-deployment tests
       run: |

@@ -31,6 +31,11 @@ def hello():
     print("I am inside great world")
     return 'Hello World! Welcome to the python_flask demo website.'
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Kubernetes probes."""
+    return {'status': 'healthy', 'message': 'Flask app is running'}, 200
+
 @app.route('/change/<dollar>/<cents>')
 def changeroute(dollar, cents):
     print(f"Make Change for {dollar}.{cents}")
@@ -40,4 +45,6 @@ def changeroute(dollar, cents):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    import os
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=8080, debug=debug_mode)
