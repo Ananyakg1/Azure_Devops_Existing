@@ -158,37 +158,34 @@ jobs:
         # Create namespace if it doesn't exist
         kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
         
-        # Create Docker registry secret
+        # Delete existing secret if it exists (to refresh credentials)
+        kubectl delete secret acr-secret -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+        
+        # Create Docker registry secret with detailed logging
+        echo "Creating Docker registry secret..."
         kubectl create secret docker-registry acr-secret \
           --docker-server=${{ secrets.REGISTRY_LOGIN_SERVER }} \
           --docker-username=${{ secrets.REGISTRY_USERNAME }} \
           --docker-password=${{ secrets.REGISTRY_PASSWORD }} \
-          --namespace=${{ env.K8S_NAMESPACE }} \
-          --dry-run=client -o yaml | kubectl apply -f -
+          --namespace=${{ env.K8S_NAMESPACE }}
         
         # Verify the secret was created
-        kubectl get secret acr-secret -n ${{ env.K8S_NAMESPACE }}
+        kubectl get secret acr-secret -n ${{ env.K8S_NAMESPACE }} -o yaml
         
-        # Test image accessibility
+        # Test Docker login with the same credentials
+        echo "Testing Docker login..."
+        echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ secrets.REGISTRY_LOGIN_SERVER }} --username ${{ secrets.REGISTRY_USERNAME }} --password-stdin
+        
+        # Test image existence
         IMAGE_TAG="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:main-${{ github.sha }}"
         echo "Testing image accessibility: $IMAGE_TAG"
         
-        # Create a test pod to verify image can be pulled
-        kubectl run test-image-pull \
-          --image=$IMAGE_TAG \
-          --restart=Never \
-          --namespace=${{ env.K8S_NAMESPACE }} \
-          --image-pull-policy=Always \
-          --dry-run=client -o yaml | kubectl apply -f -
+        # Try to pull the image directly
+        docker pull $IMAGE_TAG
         
-        # Wait for image pull test
-        kubectl wait --for=condition=ready pod/test-image-pull -n ${{ env.K8S_NAMESPACE }} --timeout=120s || true
-        
-        # Check if image pull worked
-        kubectl describe pod test-image-pull -n ${{ env.K8S_NAMESPACE }}
-        
-        # Clean up test pod
-        kubectl delete pod test-image-pull -n ${{ env.K8S_NAMESPACE }} --ignore-not-found=true
+        # List available images in the registry
+        echo "Available images in registry:"
+        docker images | grep python-flask-app || echo "No python-flask-app images found locally"
     
     - name: Deploy to AKS
       run: |
