@@ -68,7 +68,7 @@ jobs:
     needs: build-and-test
     runs-on: ubuntu-latest
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-tag: ${{ steps.build.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
     
     steps:
@@ -102,27 +102,32 @@ jobs:
         username: ${{ secrets.REGISTRY_USERNAME }}
         password: ${{ secrets.REGISTRY_PASSWORD }}
     
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-    
     - name: Build and push Docker image
       id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      run: |
+        # Create consistent tag format
+        IMAGE_TAG="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:main-${{ github.sha }}"
+        LATEST_TAG="${{ secrets.REGISTRY_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:latest"
+        
+        echo "Building image with tags:"
+        echo "  - $IMAGE_TAG"
+        echo "  - $LATEST_TAG"
+        
+        # Build and tag the image
+        docker build -t $IMAGE_TAG -t $LATEST_TAG .
+        
+        # Push both tags
+        docker push $IMAGE_TAG
+        docker push $LATEST_TAG
+        
+        # Verify the image was pushed
+        echo "Verifying image was pushed..."
+        docker pull $IMAGE_TAG
+        
+        echo "✅ Image successfully built and pushed: $IMAGE_TAG"
+        
+        # Set output for next job
+        echo "tags=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   deploy-to-aks:
     needs: build-and-push-docker
